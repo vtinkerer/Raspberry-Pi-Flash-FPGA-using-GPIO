@@ -1,4 +1,9 @@
 /*
+ * Modified by Vladyslav Baida on 12.10.2024
+ * Changes: Added the support of gpio with libgpiod
+ */
+
+/*
  * (C) Copyright 2010
  * Stefano Babic, DENX Software Engineering, sbabic@denx.de.
  * GPIO JTAG Cable Driver
@@ -39,6 +44,8 @@
 
 #include "generic.h"
 
+#include <gpiod.h>
+
 #define GPIO_PATH          "/sys/class/gpio/"
 #define GPIO_EXPORT_PATH   GPIO_PATH "export"
 #define GPIO_UNEXPORT_PATH GPIO_PATH "unexport"
@@ -54,125 +61,90 @@ enum {
 };
 
 typedef struct {
-    unsigned int jtag_gpios[4];
-    int          signals;
-    uint32_t     lastout;
-    int          fd_gpios[4];
+    unsigned int                jtag_gpios[4];
+    int                         signals;
+    uint32_t                    lastout;
+    struct gpiod_line_request   *request;
 } gpio_params_t;
 
-static int gpio_export (unsigned int gpio, int export)
-{
-    char *fname;
-    FILE *fp;
-
-    if (export)
-        fname = GPIO_EXPORT_PATH;
-    else
-        fname = GPIO_UNEXPORT_PATH;
-
-    fp = fopen (fname, FOPEN_W);
-    if (!fp)
-    {
-        urj_warning (_("%s: cannot open to (un)export GPIO %u\n"), fname, gpio);
-        return URJ_STATUS_FAIL;
-    }
-
-    fprintf (fp, "%u", gpio);
-    fclose (fp);
-
-    return URJ_STATUS_OK;
-}
-
-static int gpio_direction (unsigned int gpio, int out)
+static int gpio_set_value (urj_cable_t *cable, int pin, int value)
 {
     int ret;
-    char fname[50];
-    FILE *fp;
 
-    snprintf (fname, sizeof (fname) - 1,
-        "%sgpio%u/direction", GPIO_PATH, gpio);
-    fname[sizeof (fname) - 1] = '\0';
+    gpio_params_t *p = cable->params;
 
-    fp = fopen (fname, FOPEN_W);
-    if (!fp)
-    {
-        urj_warning (_("%s: cannot open to set direction\n"), fname);
-        return URJ_STATUS_FAIL;
-    }
-
-    ret = fprintf (fp, "%s", out ? "out" : "in");
-    fclose (fp);
-
-    if (ret != strlen (out ? "out" : "in"))
-    {
-        urj_warning (_("Error setting direction gpio %u %s %d\n"),
-                     gpio, out ? "out" : "in", ret);
+    ret = gpiod_line_request_set_value(p->request, pin, value);
+    if (ret) {
         return URJ_STATUS_FAIL;
     }
 
     return URJ_STATUS_OK;
 }
 
-static int gpio_set_value (int fd, int value)
-{
-    ssize_t ret;
-    char gpio_value = value + '0';
 
-    ret = write (fd, &gpio_value, 1);
-    if (ret != 1)
-    {
-        urj_warning (_("Error setting value gpio\n"));
-        return URJ_STATUS_FAIL;
-    }
-
-    return URJ_STATUS_OK;
-}
-
-static int gpio_get_value (int fd, unsigned int gpio)
-{
-    ssize_t ret;
-    char value;
-
-    ret = pread (fd, &value, 1, 0);
-
-    if (ret != 1)
-    {
-        urj_warning (_("Error getting value of gpio %u\n"), gpio);
-        return URJ_STATUS_FAIL;
-    }
-
-    return value == '1';
-}
-
-static int
-gpio_open (urj_cable_t *cable)
+static int gpio_get_value (urj_cable_t *cable, int pin) 
 {
     gpio_params_t *p = cable->params;
-    char fname[50];
-    int i, ret;
 
-    /* Export all gpios */
+    return gpiod_line_request_get_value(p->request, pin);
+}
+
+
+static int 
+gpio_open(urj_cable_t *cable) 
+{
+    int i, ret;
+    gpio_params_t *p = cable->params;
+
+    struct gpiod_line_request *request = NULL;
+    struct gpiod_chip *chip = NULL;
+    struct gpiod_line_config *line_cfg = NULL;
+    struct gpiod_request_config *rconfig = NULL;
+
+    chip = gpiod_chip_open("/dev/gpiochip0");
+	if (!chip) {
+        return URJ_STATUS_OK;
+    }
+
+    line_cfg = gpiod_line_config_new();
+	if (!line_cfg) {
+		return URJ_STATUS_FAIL;
+    }
+
     for (i = 0; i < GPIO_REQUIRED; i++)
     {
-        unsigned int gpio = p->jtag_gpios[i];
+        struct gpiod_line_settings *settings = NULL;
 
-        ret = gpio_export (gpio, 1);
-        if (ret)
-        {
-            urj_warning (_("gpio[%d] %u cannot be exported\n"), i, gpio);
+        settings = gpiod_line_settings_new();
+        if (!settings) {
             return URJ_STATUS_FAIL;
         }
-        gpio_direction (gpio, (i == GPIO_TDO) ? 0 : 1);
 
-        snprintf (fname, sizeof (fname), "%sgpio%u/value", GPIO_PATH, gpio);
-        fname[sizeof (fname) - 1] = '\0';
-        p->fd_gpios[i] = open (fname, O_RDWR);
-        if (p->fd_gpios[i] < 0)
-        {
-            urj_warning (_("%s: cannot open gpio[%d] %u\n"), fname, i, gpio);
+        if (i == GPIO_TDO) {
+            gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_INPUT);
+        } else {
+            gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_OUTPUT);
+            gpiod_line_settings_set_output_value(settings, GPIOD_LINE_VALUE_INACTIVE);
+        }
+
+        ret = gpiod_line_config_add_line_settings(line_cfg, &(p->jtag_gpios[i]), 1, settings);
+        if (ret) {
             return URJ_STATUS_FAIL;
         }
-   }
+    }
+
+    rconfig = gpiod_request_config_new();
+    if (!rconfig) {
+        return URJ_STATUS_FAIL;
+    }
+    gpiod_request_config_set_consumer(rconfig, "urjtag");
+
+    request = gpiod_chip_request_lines(chip, rconfig, line_cfg);
+    if (!request) {
+        return URJ_STATUS_FAIL;
+    }
+
+    p->request = request;
 
     return URJ_STATUS_OK;
 }
@@ -182,14 +154,7 @@ gpio_close (urj_cable_t *cable)
 {
     int i;
     gpio_params_t *p = cable->params;
-
-    for (i = 0; i < GPIO_REQUIRED; i++)
-    {
-        if (p->fd_gpios[i])
-            close (p->fd_gpios[i]);
-        gpio_export (p->jtag_gpios[i], 0);
-    }
-
+    gpiod_line_request_release(p->request);
     return URJ_STATUS_OK;
 }
 
@@ -310,14 +275,14 @@ gpio_clock (urj_cable_t *cable, int tms, int tdi, int n)
     tms = tms ? 1 : 0;
     tdi = tdi ? 1 : 0;
 
-    gpio_set_value (p->fd_gpios[GPIO_TMS], tms);
-    gpio_set_value (p->fd_gpios[GPIO_TDI], tdi);
+    gpio_set_value (cable, p->jtag_gpios[GPIO_TMS], tms);
+    gpio_set_value (cable, p->jtag_gpios[GPIO_TDI], tdi);
 
     for (i = 0; i < n; i++)
     {
-        gpio_set_value (p->fd_gpios[GPIO_TCK], 0);
-        gpio_set_value (p->fd_gpios[GPIO_TCK], 1);
-        gpio_set_value (p->fd_gpios[GPIO_TCK], 0);
+        gpio_set_value (cable, p->jtag_gpios[GPIO_TCK], 0);
+        gpio_set_value (cable, p->jtag_gpios[GPIO_TCK], 1);
+        gpio_set_value (cable, p->jtag_gpios[GPIO_TCK], 0);
     }
 }
 
@@ -326,14 +291,14 @@ gpio_get_tdo ( urj_cable_t *cable )
 {
     gpio_params_t *p = cable->params;
 
-    gpio_set_value(p->fd_gpios[GPIO_TCK], 0);
-    gpio_set_value(p->fd_gpios[GPIO_TDI], 0);
-    gpio_set_value(p->fd_gpios[GPIO_TMS], 0);
+    gpio_set_value(cable, p->jtag_gpios[GPIO_TCK], 0);
+    gpio_set_value(cable, p->jtag_gpios[GPIO_TDI], 0);
+    gpio_set_value(cable, p->jtag_gpios[GPIO_TMS], 0);
     p->lastout &= ~(URJ_POD_CS_TMS | URJ_POD_CS_TDI | URJ_POD_CS_TCK);
 
     urj_tap_cable_wait (cable);
 
-    return gpio_get_value (p->fd_gpios[GPIO_TDO], p->jtag_gpios[GPIO_TDO]);
+    return gpio_get_value (cable, p->jtag_gpios[GPIO_TDO]);
 }
 
 static int
@@ -361,11 +326,11 @@ gpio_set_signal (urj_cable_t *cable, int mask, int val)
     if (mask != 0)
     {
         if (mask & URJ_POD_CS_TMS)
-            gpio_set_value (p->fd_gpios[GPIO_TMS], val & URJ_POD_CS_TMS);
+            gpio_set_value (cable, p->jtag_gpios[GPIO_TMS], val & URJ_POD_CS_TMS);
         if (mask & URJ_POD_CS_TDI)
-            gpio_set_value (p->fd_gpios[GPIO_TDI], val & URJ_POD_CS_TDI);
+            gpio_set_value (cable, p->jtag_gpios[GPIO_TDI], val & URJ_POD_CS_TDI);
         if (mask & URJ_POD_CS_TCK)
-            gpio_set_value (p->fd_gpios[GPIO_TCK], val & URJ_POD_CS_TCK);
+            gpio_set_value (cable, p->jtag_gpios[GPIO_TCK], val & URJ_POD_CS_TCK);
     }
 
     p->lastout = val & mask;
