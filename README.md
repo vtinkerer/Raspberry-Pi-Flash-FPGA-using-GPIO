@@ -10,6 +10,8 @@ The first problem of Raspberry Pi flashing the FPGA is the fact that the Quartus
 There's an open-source tool called [urjtag](https://sourceforge.net/projects/urjtag/), but unfortunately it works with an old sysfs GPIO interface which is now [deprecated](https://www.thegoodpenguin.co.uk/blog/stop-using-sys-class-gpio-its-deprecated/) and is no longer used. The new approach for working with the GPIO is the "character device". There's a [libgpiod](https://github.com/brgl/libgpiod/blob/master/README) library for this case.
 So, in order to be able to flash the FGPA from Raspberry Pi, you can use this modified version of the [urjtag](https://sourceforge.net/projects/urjtag/) in which I rewrote the gpio module using the [libgpiod](https://github.com/brgl/libgpiod/blob/master/README) under the hood.
 
+And I really want to save the next guy trying to flash the FPGA using GPIOs from a few days of suffering :D
+
 # Prerequisites
 
 ## Libgpiod installed
