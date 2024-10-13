@@ -49,8 +49,9 @@ Now you should see the executable file ./src/apps/jtag/jtag which is the modifie
 2. Run the "jtag" executable file you got by completing the Installation section.
 3. Run the "cable gpio" and follow the instructions on how to set up the proper Raspberry Pi GPIO numbers for JTAG pins on the board. In my case I did "cable gpio tdi=23 tdo=24 tck=25 tms=18"
 4. Run "detect".
-5. Now you can probably see the "Unknown part!" text. It means that urjtag doesn't support the board by default, but it's easy to fix. Download the [BSDL file](https://bsdl.info/download.htm?sid=4613df0d1112445b88ca59b002289d77) (this one is an example for OMDAZZ Cyclone IV, the one you need can differ) and use it by typing "include <PATH>". In my case it was "include /home/pi/EP4CE10E22.bsdl".
-6. Now you're ready to flash the Cyclone IV! Use the "svf" command. In my case it was "svf /home/pi/lab_1.svf".
+5. Run idcode.
+6. After the p.4 you could probably see the "Unknown part!" text. It means that urjtag doesn't support the board by default, but it's easy to fix. Download the [BSDL file](https://bsdl.info/download.htm?sid=4613df0d1112445b88ca59b002289d77) (this one is an example for OMDAZZ Cyclone IV, the one you need can differ) and use it by typing "include <PATH>". In my case it was "include /home/pi/EP4CE10E22.bsdl".
+7. Now you're ready to flash the Cyclone IV! Use the "svf" command. In my case it was "svf /home/pi/lab_1.svf".
 
 # What's changed
 
